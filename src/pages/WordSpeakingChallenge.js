@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Volume2, Play, Pause, RotateCcw, CheckCircle, 
+  Mic, MicOff, Volume2, Play, Pause, RotateCcw, CheckCircle, 
   XCircle, BookOpen, Users, GraduationCap, Clock, Timer, 
-  BarChart3, Target, Brain, Trophy, Mic
+  BarChart3, Target, Brain, Trophy
 } from 'lucide-react';
 
-// Enhanced Time Tracking Hook
+// Enhanced Time Tracking Hook (from DictationMaster)
 const useTimeTracking = () => {
   const [sessionStartTime, setSessionStartTime] = useState(null);
   const [totalSessionTime, setTotalSessionTime] = useState(0);
@@ -111,6 +111,26 @@ const useTimeTracking = () => {
   };
 };
 
+// Time Display Component
+const TimeDisplay = ({ time, label, className = "" }) => {
+  const formatTime = (milliseconds) => {
+    const seconds = Math.floor(milliseconds / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours > 0) {
+      return `${hours}:${(minutes % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${(seconds % 60).toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className={`text-center ${className}`}>
+      <div className="text-2xl font-bold text-white">{formatTime(time)}</div>
+      <div className="text-sm text-white/70">{label}</div>
+    </div>
+  );
+};
+
 // Word pronunciation checker function
 function areWordsEquivalent(expected, actual) {
   const normalize = (str) => str.toLowerCase().trim().replace(/[^\w]/g, '');
@@ -149,7 +169,7 @@ const WordCard = ({
       onClick={onClick}
       className={`
         relative p-4 rounded-2xl border-2 transition-all duration-300 transform
-        cursor-pointer hover:scale-105
+        ${isActive ? 'cursor-pointer hover:scale-105' : 'cursor-default'}
         backdrop-blur-lg shadow-xl
         ${getCardStyle()}
       `}
@@ -229,30 +249,25 @@ const WordSpeakingChallenge = () => {
   const [score, setScore] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
   const [gameCompleted, setGameCompleted] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [userAnswer, setUserAnswer] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
-  const [listeningStatus, setListeningStatus] = useState('idle'); // idle, listening, processing, comparing
+  const [isAutoListening, setIsAutoListening] = useState(false);
 
   // Speech recognition refs
   const recognition = useRef(null);
   const speechSynthesis = useRef(window.speechSynthesis);
+  const silenceTimer = useRef(null);
   const timeTracking = useTimeTracking();
   const [currentWordTime, setCurrentWordTime] = useState(0);
-  const processingTimeoutRef = useRef(null);
-  const restartTimeoutRef = useRef(null);
 
   // Initialize speech recognition
   useEffect(() => {
     if ('webkitSpeechRecognition' in window) {
       recognition.current = new window.webkitSpeechRecognition();
-      recognition.current.continuous = false; // Changed to false for better control
+      recognition.current.continuous = true;
       recognition.current.interimResults = true;
       recognition.current.lang = 'en-US';
-      recognition.current.maxAlternatives = 1;
-
-      recognition.current.onstart = () => {
-        setListeningStatus('listening');
-      };
 
       recognition.current.onresult = (event) => {
         let finalTranscript = '';
@@ -268,19 +283,9 @@ const WordSpeakingChallenge = () => {
         }
 
         if (finalTranscript.trim()) {
-          setListeningStatus('processing');
           setUserAnswer(finalTranscript.trim());
           setInterimTranscript('');
-          
-          // Clear any existing processing timeout
-          if (processingTimeoutRef.current) {
-            clearTimeout(processingTimeoutRef.current);
-          }
-          
-          // Process the result after a short delay
-          processingTimeoutRef.current = setTimeout(() => {
-            checkPronunciation(finalTranscript.trim());
-          }, 200);
+          checkPronunciation(finalTranscript.trim());
         } else {
           setInterimTranscript(interim.trim());
         }
@@ -288,56 +293,42 @@ const WordSpeakingChallenge = () => {
 
       recognition.current.onerror = (event) => {
         console.error('Speech recognition error', event.error);
-        if (gameStarted && !gameCompleted && !timeTracking.isPaused) {
-          // Restart recognition after error
-          restartRecognition();
+        if (isAutoListening) {
+          // Restart recognition if in auto mode
+          setTimeout(() => {
+            if (recognition.current && !gameCompleted) {
+              try {
+                recognition.current.start();
+              } catch (e) {
+                console.warn('Could not restart recognition');
+              }
+            }
+          }, 1000);
         }
       };
 
       recognition.current.onend = () => {
-        if (gameStarted && !gameCompleted && !timeTracking.isPaused && listeningStatus !== 'processing') {
-          // Restart recognition if game is still active
-          restartRecognition();
-        } else if (listeningStatus === 'listening') {
-          setListeningStatus('idle');
+        if (isAutoListening && !gameCompleted) {
+          // Automatically restart recognition for continuous listening
+          setTimeout(() => {
+            if (recognition.current) {
+              try {
+                recognition.current.start();
+              } catch (e) {
+                console.warn('Could not restart recognition');
+              }
+            }
+          }, 100);
         }
       };
     }
 
     return () => {
       if (recognition.current) recognition.current.stop();
-      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
-      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+      clearTimeout(silenceTimer.current);
       if (speechSynthesis.current) speechSynthesis.current.cancel();
     };
-  }, [gameStarted, gameCompleted, timeTracking.isPaused, listeningStatus]);
-
-  // Restart recognition function
-  const restartRecognition = () => {
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-    }
-    
-    restartTimeoutRef.current = setTimeout(() => {
-      if (recognition.current && gameStarted && !gameCompleted && !timeTracking.isPaused) {
-        try {
-          recognition.current.start();
-        } catch (e) {
-          console.warn('Could not restart recognition:', e);
-          // Try again after a longer delay
-          setTimeout(() => {
-            if (recognition.current && gameStarted && !gameCompleted && !timeTracking.isPaused) {
-              try {
-                recognition.current.start();
-              } catch (err) {
-                console.warn('Could not restart recognition after retry:', err);
-              }
-            }
-          }, 1000);
-        }
-      }
-    }, 500);
-  };
+  }, [isAutoListening, gameCompleted]);
 
   // Initialize game
   useEffect(() => {
@@ -359,13 +350,8 @@ const WordSpeakingChallenge = () => {
 
   const resetGame = () => {
     const words = [...wordSets[selectedClass].words];
-    // Use a more reliable shuffle algorithm
-    for (let i = words.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [words[i], words[j]] = [words[j], words[i]];
-    }
-    const totalWords = wordSets[selectedClass].gridSize.cols * wordSets[selectedClass].gridSize.rows;
-    setCurrentWords(words.slice(0, totalWords));
+    const shuffled = words.sort(() => Math.random() - 0.5);
+    setCurrentWords(shuffled.slice(0, wordSets[selectedClass].gridSize.cols * wordSets[selectedClass].gridSize.rows));
     setCurrentWordIndex(0);
     setCompletedWords({});
     setScore(0);
@@ -373,41 +359,31 @@ const WordSpeakingChallenge = () => {
     setGameCompleted(false);
     setUserAnswer('');
     setInterimTranscript('');
-    setListeningStatus('idle');
+    setIsListening(false);
+    setIsAutoListening(false);
     timeTracking.resetTracking();
-    
-    // Clean up recognition
-    if (recognition.current) {
-      try {
-        recognition.current.stop();
-      } catch (e) {
-        console.warn('Error stopping recognition:', e);
-      }
-    }
-    if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
-    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+    if (recognition.current) recognition.current.stop();
   };
 
   const startGame = () => {
     setGameStarted(true);
-    setListeningStatus('idle');
+    setIsAutoListening(true);
     timeTracking.startSession();
     timeTracking.startWordTimer(0);
     
-    // Start recognition
+    // Start continuous listening
     if (recognition.current) {
       try {
         recognition.current.start();
+        setIsListening(true);
       } catch (e) {
-        console.warn('Could not start recognition:', e);
+        console.warn('Could not start recognition');
       }
     }
   };
 
   const checkPronunciation = (spokenWord) => {
     if (currentWordIndex >= currentWords.length) return;
-    
-    setListeningStatus('comparing');
     
     const expectedWord = currentWords[currentWordIndex];
     const isCorrect = areWordsEquivalent(expectedWord, spokenWord);
@@ -423,43 +399,25 @@ const WordSpeakingChallenge = () => {
 
     timeTracking.endWordTimer(currentWordIndex, isCorrect);
     
-    // Show result for a moment, then advance
+    // Auto-advance immediately to next word
     setTimeout(() => {
       nextWord();
-    }, 800);
+    }, 500);
   };
 
   const nextWord = () => {
     if (currentWordIndex < currentWords.length - 1) {
-      const nextIndex = currentWordIndex + 1;
-      setCurrentWordIndex(nextIndex);
+      setCurrentWordIndex(prev => prev + 1);
       setUserAnswer('');
       setInterimTranscript('');
-      setListeningStatus('idle');
-      timeTracking.startWordTimer(nextIndex);
-      
-      // Start recognition for next word
-      setTimeout(() => {
-        if (recognition.current && gameStarted && !gameCompleted && !timeTracking.isPaused) {
-          try {
-            recognition.current.start();
-          } catch (e) {
-            console.warn('Could not start recognition for next word:', e);
-          }
-        }
-      }, 300);
+      timeTracking.startWordTimer(currentWordIndex + 1);
     } else {
       // Game completed
       setGameCompleted(true);
-      setListeningStatus('idle');
+      setIsAutoListening(false);
+      setIsListening(false);
       timeTracking.endSession();
-      if (recognition.current) {
-        try {
-          recognition.current.stop();
-        } catch (e) {
-          console.warn('Error stopping recognition:', e);
-        }
-      }
+      if (recognition.current) recognition.current.stop();
     }
   };
 
@@ -481,27 +439,21 @@ const WordSpeakingChallenge = () => {
     }
   };
 
-  const pauseGame = () => {
-    timeTracking.togglePause();
-    if (timeTracking.isPaused) {
-      // Resume game
-      if (recognition.current && gameStarted && !gameCompleted) {
+  const toggleListening = () => {
+    if (isAutoListening) {
+      setIsAutoListening(false);
+      setIsListening(false);
+      if (recognition.current) recognition.current.stop();
+    } else {
+      setIsAutoListening(true);
+      setIsListening(true);
+      if (recognition.current) {
         try {
           recognition.current.start();
         } catch (e) {
-          console.warn('Could not resume recognition:', e);
+          console.warn('Could not start recognition');
         }
       }
-    } else {
-      // Pause game
-      if (recognition.current) {
-        try {
-          recognition.current.stop();
-        } catch (e) {
-          console.warn('Error pausing recognition:', e);
-        }
-      }
-      setListeningStatus('idle');
     }
   };
 
@@ -514,44 +466,8 @@ const WordSpeakingChallenge = () => {
     }
   };
 
-  const getListeningStatusDisplay = () => {
-    switch (listeningStatus) {
-      case 'listening':
-        return (
-          <div className="flex items-center justify-center gap-2 text-cyan-400">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
-            </span>
-            <Mic className="w-5 h-5 animate-pulse" />
-            <span>Listening... Say "{currentWords[currentWordIndex]}"</span>
-          </div>
-        );
-      case 'processing':
-        return (
-          <div className="flex items-center justify-center gap-2 text-yellow-400">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-400"></div>
-            <span>Processing your voice...</span>
-          </div>
-        );
-      case 'comparing':
-        return (
-          <div className="flex items-center justify-center gap-2 text-purple-400">
-            <Brain className="w-5 h-5 animate-pulse" />
-            <span>Comparing word...</span>
-          </div>
-        );
-      default:
-        return (
-          <div className="text-white/60 text-center">
-            {timeTracking.isPaused ? 'Game Paused' : 'Preparing to listen...'}
-          </div>
-        );
-    }
-  };
-
   const stats = timeTracking.getStats();
-  const currentWord = gameStarted && !gameCompleted && currentWords.length > 0 ? currentWords[currentWordIndex] : null;
+  const currentWord = gameStarted && !gameCompleted ? currentWords[currentWordIndex] : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 p-4 relative overflow-hidden">
@@ -633,6 +549,28 @@ const WordSpeakingChallenge = () => {
 
                 {/* Game Controls */}
                 <div className="flex flex-col lg:flex-row gap-3">
+                  {/* Mic Control */}
+                  <button
+                    onClick={toggleListening}
+                    className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-105 flex items-center gap-2 ${
+                      isAutoListening
+                        ? 'bg-gradient-to-r from-red-500 to-pink-600 text-white shadow-lg shadow-red-500/30'
+                        : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/30'
+                    }`}
+                  >
+                    {isAutoListening ? (
+                      <>
+                        <MicOff className="w-5 h-5" />
+                        Stop Mic
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-5 h-5" />
+                        Start Mic
+                      </>
+                    )}
+                  </button>
+
                   {/* Hear Word */}
                   <button
                     onClick={() => currentWord && playWordPronunciation(currentWord)}
@@ -644,7 +582,7 @@ const WordSpeakingChallenge = () => {
 
                   {/* Pause/Resume */}
                   <button
-                    onClick={pauseGame}
+                    onClick={timeTracking.togglePause}
                     className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-105 flex items-center gap-2 ${
                       timeTracking.isPaused
                         ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/30'
@@ -677,15 +615,10 @@ const WordSpeakingChallenge = () => {
                   <button
                     onClick={() => {
                       setGameCompleted(true);
-                      setListeningStatus('idle');
+                      setIsAutoListening(false);
+                      setIsListening(false);
                       timeTracking.endSession();
-                      if (recognition.current) {
-                        try {
-                          recognition.current.stop();
-                        } catch (e) {
-                          console.warn('Error stopping recognition:', e);
-                        }
-                      }
+                      if (recognition.current) recognition.current.stop();
                     }}
                     className="px-6 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-red-600 to-red-700 text-white shadow-lg shadow-red-600/30 flex items-center gap-2"
                   >
@@ -698,15 +631,10 @@ const WordSpeakingChallenge = () => {
                     onClick={() => {
                       setGameStarted(false);
                       setGameCompleted(false);
-                      setListeningStatus('idle');
+                      setIsAutoListening(false);
+                      setIsListening(false);
                       timeTracking.resetTracking();
-                      if (recognition.current) {
-                        try {
-                          recognition.current.stop();
-                        } catch (e) {
-                          console.warn('Error stopping recognition:', e);
-                        }
-                      }
+                      if (recognition.current) recognition.current.stop();
                     }}
                     className="px-6 py-3 rounded-xl font-semibold transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-600/30 flex items-center gap-2"
                   >
@@ -748,20 +676,27 @@ const WordSpeakingChallenge = () => {
                 {currentWord}
               </div>
               
-              {/* Speech Recognition Status */}
-              <div className="mb-4">
-                {getListeningStatusDisplay()}
-                {interimTranscript && listeningStatus === 'listening' && (
-                  <p className="mt-2 text-lg text-cyan-200">
-                    "{interimTranscript}"
+              {/* Speech Recognition Feedback */}
+              {isListening && (
+                <div className="mb-4">
+                  <p className="text-cyan-400 font-semibold animate-pulse flex items-center justify-center gap-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
+                    </span>
+                    Listening... Say "{currentWord}"
                   </p>
-                )}
-                {userAnswer && listeningStatus === 'processing' && (
-                  <p className="mt-2 text-lg text-yellow-200">
-                    You said: "{userAnswer}"
-                  </p>
-                )}
-              </div>
+                  {interimTranscript && (
+                    <p className="mt-2 text-lg text-cyan-200">
+                      "{interimTranscript}"
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!isListening && (
+                <p className="text-white/60">Start listening to begin speaking words</p>
+              )}
             </div>
           </div>
         )}
@@ -798,7 +733,7 @@ const WordSpeakingChallenge = () => {
                 <Target className="w-6 h-6" /> Ready to Start?
               </h3>
               <p className="text-white/80 mb-6">
-                You'll speak each word one by one through the grid. The microphone will automatically listen and advance to the next word!
+                You'll speak each word one by one through the grid. Just like a typing test, but with your voice!
               </p>
               <button
                 onClick={startGame}
@@ -892,13 +827,13 @@ const WordSpeakingChallenge = () => {
         {!gameStarted && (
           <div className="backdrop-blur-lg bg-white/10 rounded-2xl p-6 border border-white/20 shadow-2xl">
             <h3 className="text-xl font-semibold text-white mb-4 text-center">How It Works</h3>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
               <div className="flex flex-col items-center">
                 <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-3">
                   <span className="text-white font-bold">1</span>
                 </div>
-                <h4 className="text-white font-semibold mb-2">Auto Listen</h4>
-                <p className="text-white/70 text-sm">Microphone automatically starts listening when you begin</p>
+                <h4 className="text-white font-semibold mb-2">Start Challenge</h4>
+                <p className="text-white/70 text-sm">Click start and microphone will begin listening continuously</p>
               </div>
               <div className="flex flex-col items-center">
                 <div className="w-12 h-12 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full flex items-center justify-center mb-3">
@@ -912,14 +847,7 @@ const WordSpeakingChallenge = () => {
                   <span className="text-white font-bold">3</span>
                 </div>
                 <h4 className="text-white font-semibold mb-2">Auto Progress</h4>
-                <p className="text-white/70 text-sm">Game automatically moves to next word and restarts listening</p>
-              </div>
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-gradient-to-r from-pink-500 to-red-600 rounded-full flex items-center justify-center mb-3">
-                  <span className="text-white font-bold">4</span>
-                </div>
-                <h4 className="text-white font-semibold mb-2">See Results</h4>
-                <p className="text-white/70 text-sm">Words turn green for correct, red for incorrect automatically</p>
+                <p className="text-white/70 text-sm">Game automatically moves to next word when you speak correctly</p>
               </div>
             </div>
           </div>

@@ -210,17 +210,17 @@ const StatisticsPanel = ({ stats, wordTimes, streak, bestStreak }) => {
   );
 };
 
-const WordCard = ({ word, isCorrect, isWrong, onClick }) => {
+const WordCard = ({ word, isCorrect, isWrong, onClick, isDisabled }) => {
   const cardStyle = isCorrect
     ? "bg-green-400/30 border-green-400"
     : isWrong
-    ? "bg-red-400/30 border-red-400"
+    ? "bg-red-400/30 border-red-400 opacity-60 cursor-not-allowed"
     : "bg-white/10 border-white/20 hover:bg-white/15";
 
   return (
     <div
-      onClick={onClick}
-      className={`p-4 rounded-lg border-2 ${cardStyle} cursor-pointer transition-colors`}
+      onClick={isDisabled ? undefined : onClick}
+      className={`p-4 rounded-lg border-2 ${cardStyle} ${!isDisabled ? 'cursor-pointer' : ''} transition-colors`}
     >
       {word}
       {isCorrect && <CheckCircle className="ml-2 inline" />}
@@ -405,31 +405,6 @@ const WordReadingChallenge = () => {
     timeTracking.isPaused,
   ]);
 
-  useEffect(() => {
-    if (
-      isContinuousPlaying &&
-      gameStarted &&
-      !gameCompleted &&
-      !gameEnded &&
-      !timeTracking.isPaused
-    ) {
-      const timer = setTimeout(() => {
-        if (completedWordsCount < wordCount) {
-          nextWord();
-        }
-      }, 2500);
-      return () => clearTimeout(timer);
-    }
-  }, [
-    completedWordsCount,
-    isContinuousPlaying,
-    gameStarted,
-    gameCompleted,
-    gameEnded,
-    timeTracking.isPaused,
-    wordCount,
-  ]);
-
   const createWordsQueue = () => {
     const words = [...wordSets[selectedClass].words];
     const shuffled = [...words].sort(() => Math.random() - 0.5);
@@ -466,14 +441,16 @@ const WordReadingChallenge = () => {
     nextWord();
   };
 
-  const getRandomWord = () => {
-    if (availableWords.length === 0) {
-      return null;
-    }
-    const randomIndex = Math.floor(Math.random() * availableWords.length);
-    const word = availableWords[randomIndex];
-    return word;
-  };
+const getRandomWord = () => {
+  if (availableWords.length === 0) {
+    return null;
+  }
+  
+  // Get a random word from remaining available words
+  const randomIndex = Math.floor(Math.random() * availableWords.length);
+  const word = availableWords[randomIndex];
+  return word;
+};
 
   const speakWord = (word) => {
     if (speechSynthesis.current && word) {
@@ -485,6 +462,7 @@ const WordReadingChallenge = () => {
     }
   };
 
+  
   const nextWord = () => {
     if (availableWords.length === 0) {
       endGame();
@@ -502,60 +480,58 @@ const WordReadingChallenge = () => {
     timeTracking.startWordTimer(completedWordsCount);
   };
 
-  const selectWord = (wordIndex) => {
-    const selectedWord = currentWords[wordIndex];
+const selectWord = (wordIndex) => {
+  const selectedWord = currentWords[wordIndex];
 
-    // Prevent selecting already judged words
-    if (correctWords.has(wordIndex) || wrongSelections.has(selectedWord)) {
-      return;
-    }
+  // Prevent selecting already judged words
+  if (correctWords.has(wordIndex) || wrongSelections.has(selectedWord)) {
+    return;
+  }
 
-    if (selectedWord === targetWord) {
-      // Correct selection
-      setCorrectWords((prev) => new Set([...prev, wordIndex]));
-      setScore((prev) => prev + 1);
-      setStreak((prev) => prev + 1);
-      setBestStreak((prev) => Math.max(prev, streak + 1));
-      
-      // Remove the word from available words
-      setAvailableWords((prev) => prev.filter((w) => w !== selectedWord));
-      
-      setFeedbackMessage("Correct! 🎉");
-      setTimeout(() => setFeedbackMessage(""), 1500);
-      
-      timeTracking.endWordTimer(completedWordsCount, true);
-      setCompletedWordsCount((prev) => prev + 1);
-      
-      if (autoAdvance) {
-        setTimeout(() => {
-          if (availableWords.length > 1) {
-            nextWord();
-          } else {
-            endGame();
-          }
-        }, 1000);
-      }
-    } else {
-      // Wrong selection
-      setWrongSelections((prev) => new Set([...prev, selectedWord]));
-      setStreak(0);
-      
-      setFeedbackMessage(`Incorrect! Find "${targetWord}"`);
-      setTimeout(() => setFeedbackMessage(""), 1500);
-      
-      timeTracking.endWordTimer(completedWordsCount, false);
-      
-      if (autoAdvance) {
-        setTimeout(() => {
-          if (availableWords.length > 0) {
-            nextWord();
-          } else {
-            endGame();
-          }
-        }, 1000);
-      }
+  if (selectedWord === targetWord) {
+    // Correct selection
+    setCorrectWords((prev) => new Set([...prev, wordIndex]));
+    setScore((prev) => prev + 1);
+    setStreak((prev) => prev + 1);
+    setBestStreak((prev) => Math.max(prev, streak + 1));
+    
+    setFeedbackMessage("Correct! 🎉");
+    setTimeout(() => setFeedbackMessage(""), 1500);
+    
+    timeTracking.endWordTimer(completedWordsCount, true);
+    setCompletedWordsCount((prev) => prev + 1);
+    
+    // Remove from available words
+    setAvailableWords((prev) => prev.filter((w) => w !== selectedWord));
+    
+    if (autoAdvance) {
+      setTimeout(() => {
+        nextWord();
+      }, 1500);
     }
-  };
+    
+  } else {
+    // Wrong selection - mark as wrong AND remove from findable words
+    setWrongSelections((prev) => new Set([...prev, selectedWord]));
+    setStreak(0);
+    
+    // Also remove the wrongly selected word from available words
+    setAvailableWords((prev) => prev.filter((w) => w !== selectedWord));
+    
+    setFeedbackMessage(`Incorrect! Moving to next word...`);
+    setTimeout(() => setFeedbackMessage(""), 1500);
+    
+    timeTracking.endWordTimer(completedWordsCount, false);
+    setCompletedWordsCount((prev) => prev + 1);
+    
+    // Auto-advance to next word after wrong selection
+    if (autoAdvance) {
+      setTimeout(() => {
+        nextWord();
+      }, 1500);
+    }
+  }
+};
 
   const advanceToNextWord = () => {
     if (completedWordsCount < wordCount) {
@@ -1063,15 +1039,16 @@ const WordReadingChallenge = () => {
               <div className="mb-8">
                 <div className="backdrop-blur-lg bg-white/10 rounded-2xl p-6 border border-white/20 shadow-2xl">
                   <div className={`grid gap-4 ${getGridColsClass()}`}>
-                    {currentWords.map((word, index) => (
-                      <WordCard
-                        key={`${word}-${index}`}
-                        word={word}
-                        isCorrect={correctWords.has(index)}
-                        isWrong={wrongSelections.has(word)}
-                        onClick={() => selectWord(index)}
-                      />
-                    ))}
+                   {currentWords.map((word, index) => (
+  <WordCard
+    key={`${word}-${index}`}
+    word={word}
+    isCorrect={correctWords.has(index)}
+    isWrong={wrongSelections.has(word)}
+    isDisabled={correctWords.has(index) || wrongSelections.has(word)}
+    onClick={() => selectWord(index)}
+  />
+))}
                   </div>
                 </div>
               </div>
